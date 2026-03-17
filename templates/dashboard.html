@@ -1,0 +1,122 @@
+{% extends "layout.html" %}
+{% block content %}
+
+<h3 class="mb-4">📊 Dashboard Analytics</h3>
+
+<!-- ===================== CARDS ===================== -->
+<div class="row g-4 mb-4">
+
+    <div class="col-md-4">
+        <div class="card bg-primary text-white shadow text-center p-3">
+            <h6>Total Donors</h6>
+            <h2>{{ donors }}</h2>
+        </div>
+    </div>
+
+    <div class="col-md-4">
+        <div class="card bg-success text-white shadow text-center p-3">
+            <h6>Total Donations</h6>
+            <h2>{{ donations }}</h2>
+        </div>
+    </div>
+
+    <div class="col-md-4">
+        <div class="card bg-warning text-dark shadow text-center p-3">
+            <h6>Units Collected</h6>
+            <h2>{{ units }}</h2>
+        </div>
+    </div>
+
+</div>
+
+
+<!-- ===================== CHARTS ===================== -->
+<div class="row g-4">
+
+    <!-- BAR CHART -->
+    <div class="col-md-6">
+        <div class="card p-3 shadow">
+            <h6 class="text-center">Blood Group Distribution</h6>
+            <canvas id="bloodChart"></canvas>
+        </div>
+    </div>
+
+    <!-- PIE CHART -->
+    <div class="col-md-6">
+        <div class="card p-3 shadow">
+            <h6 class="text-center">Units Share by Blood Type</h6>
+            <canvas id="pieChart"></canvas>
+        </div>
+    </div>
+
+</div>
+
+<div class="row mt-4">
+    <!-- LINE CHART -->
+    <div class="col-md-12">
+        <div class="card p-3 shadow">
+            <h6 class="text-center">Donations Over Time</h6>
+            <canvas id="lineChart"></canvas>
+        </div>
+    </div>
+</div>
+
+
+<!-- ===================== CHART JS ===================== -->
+<script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
+
+<script>
+const bloodLabels = {{ blood_labels|tojson }};
+const bloodCounts = {{ blood_counts|tojson }};
+const dateLabels = {{ date_labels|tojson }};
+const dateUnits = {{ date_units|tojson }};
+
+
+
+// -------- BAR --------
+new Chart(document.getElementById("bloodChart"), {
+    type: "bar",
+    data: {
+        labels: bloodLabels,
+        datasets: [{
+            label: "Donors",
+            data: bloodCounts,
+            backgroundColor: "#dc3545"
+        }]
+    }
+});
+
+
+// -------- PIE --------
+new Chart(document.getElementById("pieChart"), {
+    type: "pie",
+    data: {
+        labels: bloodLabels,
+        datasets: [{
+            data: bloodCounts,
+            backgroundColor: [
+                "#dc3545","#0d6efd","#198754","#ffc107",
+                "#6f42c1","#20c997","#fd7e14","#6c757d"
+            ]
+        }]
+    }
+});
+
+
+// -------- LINE --------
+new Chart(document.getElementById("lineChart"), {
+    type: "line",
+    data: {
+        labels: dateLabels,
+        datasets: [{
+            label: "Units Donated",
+            data: dateUnits,
+            borderColor: "#198754",
+            fill: false,
+            tension: 0.3
+        }]
+    }
+});
+</script>
+
+{% endblock %}

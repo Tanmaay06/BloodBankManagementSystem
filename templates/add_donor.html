@@ -1,0 +1,20 @@
+{% extends "layout.html" %}
+{% block content %}
+
+<h2>Add Donor</h2>
+
+<form method="POST">
+
+<input name="name" placeholder="Name" class="form-control mb-2">
+<input name="age" placeholder="Age" class="form-control mb-2">
+<input name="blood" placeholder="Blood Group" class="form-control mb-2">
+<input name="phone" placeholder="Contact" class="form-control mb-2">
+<input name="address" placeholder="Address" class="form-control mb-2">
+<input name="quantity" placeholder="Units" class="form-control mb-2">
+<input type="date" name="date" class="form-control mb-2">
+
+<button class="btn btn-success">Save</button>
+
+</form>
+
+{% endblock %}

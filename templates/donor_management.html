@@ -1,0 +1,93 @@
+{% extends "layout.html" %}
+{% block content %}
+
+<h3 class="mb-4">👤 Donor Management</h3>
+
+<ul class="nav nav-tabs" id="tabs">
+  <li class="nav-item">
+    <button class="nav-link active" data-bs-toggle="tab" data-bs-target="#search">Search</button>
+  </li>
+  <li class="nav-item">
+    <button class="nav-link" data-bs-toggle="tab" data-bs-target="#update">Update</button>
+  </li>
+  <li class="nav-item">
+    <button class="nav-link" data-bs-toggle="tab" data-bs-target="#delete">Delete</button>
+  </li>
+</ul>
+
+<div class="tab-content p-4 bg-secondary rounded-bottom">
+
+<!-- SEARCH -->
+<div class="tab-pane fade show active" id="search">
+<form method="POST">
+<input type="hidden" name="action" value="search">
+
+<select name="field" class="form-control mb-2">
+<option value="donor_id">ID</option>
+<option value="name">Name</option>
+<option value="age">Age</option>
+<option value="blood_type">Blood</option>
+<option value="address">Address</option>
+</select>
+
+<input name="value" class="form-control mb-2" placeholder="Enter value">
+
+<button class="btn btn-primary">Search</button>
+</form>
+</div>
+
+
+<!-- UPDATE -->
+<div class="tab-pane fade" id="update">
+<form method="POST">
+<input type="hidden" name="action" value="update">
+
+<input name="donor_id" class="form-control mb-2" placeholder="Donor ID">
+
+<select name="field" class="form-control mb-2">
+<option value="name">Name</option>
+<option value="age">Age</option>
+<option value="blood_type">Blood</option>
+<option value="contact_no">Contact</option>
+<option value="address">Address</option>
+</select>
+
+<input name="new_value" class="form-control mb-2" placeholder="New value">
+
+<button class="btn btn-warning">Update</button>
+</form>
+</div>
+
+
+<!-- DELETE -->
+<div class="tab-pane fade" id="delete">
+<form method="POST">
+<input type="hidden" name="action" value="delete">
+
+<input name="value" class="form-control mb-2" placeholder="Donor ID">
+
+<button class="btn btn-danger">Delete</button>
+</form>
+</div>
+
+</div>
+
+{% if rows %}
+<table class="table table-dark table-striped mt-4">
+<tr>
+<th>ID</th><th>Name</th><th>Age</th><th>Blood</th><th>Contact</th><th>Address</th>
+</tr>
+{% for r in rows %}
+<tr>
+<td>{{ r[0] }}</td>
+<td>{{ r[1] }}</td>
+<td>{{ r[2] }}</td>
+<td>{{ r[3] }}</td>
+<td>{{ r[4] }}</td>
+<td>{{ r[5] }}</td>
+</tr>
+{% endfor %}
+</table>
+{% endif %}
+
+{% endblock %}
