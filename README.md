@@ -1,4 +1,4 @@
-# 🩸 Blood Donation Management System
+# 🩸 Blood-Sathi
 
 A comprehensive, full-stack web application designed to streamline blood bank operations, manage donor records, track inventory, and facilitate blood requests.
 
