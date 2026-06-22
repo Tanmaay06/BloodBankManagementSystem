@@ -1,7 +1,5 @@
 from flask import Flask, jsonify, request, send_from_directory
 from flask_cors import CORS
-from db import get_db, get_auth
-from google.cloud.firestore_v1.base_query import FieldFilter
 from datetime import datetime
 import os
 import requests as http_requests
@@ -9,13 +7,30 @@ from dotenv import load_dotenv
 
 load_dotenv()  # Load .env variables (FIREBASE_API_KEY, SECRET_KEY, etc.)
 
+# Absolute path so Vercel's serverless runtime finds static files correctly
+BASE_DIR = os.path.dirname(os.path.abspath(__file__))
 
-app = Flask(__name__, static_folder="static", static_url_path="")
+try:
+    from db import get_db, get_auth
+    from google.cloud.firestore_v1.base_query import FieldFilter
+    _firebase_error = None
+except Exception as _e:
+    _firebase_error = str(_e)
+    get_db = get_auth = FieldFilter = None  # will surface as 503 on first use
+
+app = Flask(__name__, static_folder=os.path.join(BASE_DIR, "static"), static_url_path="")
 app.secret_key = os.environ.get("SECRET_KEY", "dev-insecure-key-change-in-prod")
 CORS(app)
 
 # Firebase Web API Key — required for the REST sign-in endpoint
 FIREBASE_API_KEY = os.environ.get("FIREBASE_API_KEY", "")
+
+
+def _require_firebase():
+    """Return (db, None) or (None, error_response) if Firebase failed to init."""
+    if _firebase_error:
+        return None, (jsonify({"error": "Firebase init failed", "detail": _firebase_error}), 503)
+    return get_db(), None
 
 
 def _make_email(username: str) -> str:
@@ -24,8 +39,31 @@ def _make_email(username: str) -> str:
 
 
 # ══════════════════════════════════════════════════════════════════════════════
+# HEALTH CHECK — use this to diagnose Vercel startup issues
+# ══════════════════════════════════════════════════════════════════════════════
+
+@app.route("/favicon.ico")
+def favicon():
+    """Prevent 500 errors from browsers requesting a missing favicon."""
+    return "", 204
+
+
+@app.route("/api/health", methods=["GET"])
+def health():
+    if _firebase_error:
+        return jsonify({"status": "error", "firebase": _firebase_error}), 503
+    try:
+        db = get_db()
+        db.collection("_health").document("ping").set({"ok": True})
+        return jsonify({"status": "ok", "firebase": "connected"}), 200
+    except Exception as e:
+        return jsonify({"status": "error", "firebase": str(e)}), 503
+
+
+# ══════════════════════════════════════════════════════════════════════════════
 # AUTHENTICATION
 # ══════════════════════════════════════════════════════════════════════════════
+
 
 @app.route("/api/signup", methods=["POST"])
 def signup():

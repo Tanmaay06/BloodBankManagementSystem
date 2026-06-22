@@ -7,22 +7,30 @@ import json
 def _init_firebase():
     """Initialize Firebase Admin SDK (idempotent).
 
-    - Local dev:  reads the JSON key file at FIREBASE_CREDENTIALS_PATH
-                  (defaults to 'firebase_credentials.json')
-    - Production: reads the entire JSON from FIREBASE_CREDENTIALS_JSON
-                  env variable (set in Vercel / any serverless host)
+    Priority order for credentials:
+    1. FIREBASE_CREDENTIALS_JSON env var  → used on Vercel / any serverless host
+    2. File at FIREBASE_CREDENTIALS_PATH  → used locally (defaults to firebase_credentials.json)
     """
     if firebase_admin._apps:
         return  # Already initialized
 
-    json_str = os.environ.get("FIREBASE_CREDENTIALS_JSON")
+    json_str = os.environ.get("FIREBASE_CREDENTIALS_JSON", "").strip()
+
     if json_str:
-        # Serverless / Vercel path — credentials stored as env var
+        # Serverless / Vercel: full JSON stored as env var
         cred_dict = json.loads(json_str)
         cred = credentials.Certificate(cred_dict)
     else:
-        # Local dev path — credentials stored as a JSON file
-        cred_path = os.environ.get("FIREBASE_CREDENTIALS_PATH", "firebase_credentials.json")
+        # Local dev: read from JSON file
+        cred_path = os.environ.get(
+            "FIREBASE_CREDENTIALS_PATH",
+            os.path.join(os.path.dirname(os.path.abspath(__file__)), "firebase_credentials.json")
+        )
+        if not os.path.exists(cred_path):
+            raise FileNotFoundError(
+                f"Firebase credentials not found. Set FIREBASE_CREDENTIALS_JSON env var "
+                f"(for Vercel/production) or place firebase_credentials.json at: {cred_path}"
+            )
         cred = credentials.Certificate(cred_path)
 
     firebase_admin.initialize_app(cred)
