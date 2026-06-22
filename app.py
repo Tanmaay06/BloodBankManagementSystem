@@ -33,9 +33,23 @@ def _require_firebase():
     return get_db(), None
 
 
+@app.before_request
+def check_firebase():
+    """Block ALL /api/* requests early if Firebase failed to initialize.
+    This prevents cryptic 500s and surfaces the real error as readable JSON."""
+    if request.path.startswith("/api/") and request.path not in ("/api/health",):
+        if _firebase_error:
+            return jsonify({
+                "error": "Firebase not initialized",
+                "detail": _firebase_error,
+                "fix": "Check FIREBASE_CREDENTIALS_JSON env var on Vercel"
+            }), 503
+
+
 def _make_email(username: str) -> str:
     """Convert a plain username to a deterministic Firebase Auth email."""
     return f"{username}@bloodbank.app"
+
 
 
 # ══════════════════════════════════════════════════════════════════════════════
