@@ -1,9 +1,5 @@
-import mysql.connector
+# db_config.py — Legacy stub (MySQL config removed)
+# All database access is now handled through db.py (Firebase Firestore).
+# This file is kept for reference only and is no longer used by the application.
 
-def get_connection():
-    return mysql.connector.connect(
-        host="localhost",
-        user="root",
-        password="root123",
-        database="blood_bank_management"
-    )
+from db import get_db, get_auth  # noqa: F401  (re-export for any legacy imports)

@@ -1,254 +1,142 @@
-<<<<<<< HEAD
-import mysql.connector
+"""
+donor_service.py — Firebase Firestore donor helper functions.
 
-# ---------- DB CONNECTION ----------
-def get_connection():
-    return mysql.connector.connect(
-        host="localhost",
-        user="root",
-        password="root123",   # change if needed
-        database="blood_donation_db"
-    )
+Provides convenience wrappers around the Firestore 'donors', 'donations',
+and 'requests' collections.  Used for scripting / CLI tasks; the Flask API
+(app.py) calls Firestore directly for finer control.
+"""
 
-# ---------- ADD ----------
-def add_donor(name, age, gender, blood_group, phone, address):
-    conn = get_connection()
-    cur = conn.cursor()
-    cur.execute(
-        """
-        INSERT INTO donor (name, age, gender, blood_group, phone, address)
-        VALUES (%s,%s,%s,%s,%s,%s)
-        """,
-        (name, age, gender, blood_group, phone, address)
-    )
-    conn.commit()
-    conn.close()
-
-# ---------- VIEW ----------
-def get_all_donors():
-    conn = get_connection()
-    cur = conn.cursor(dictionary=True)
-    cur.execute("SELECT * FROM donor")
-    data = cur.fetchall()
-    conn.close()
-    return data
-
-# ---------- SEARCH ----------
-def search_by_blood(blood):
-    conn = get_connection()
-    cur = conn.cursor(dictionary=True)
-    cur.execute("SELECT * FROM donor WHERE blood_group=%s", (blood,))
-    data = cur.fetchall()
-    conn.close()
-    return data
-
-# ---------- DELETE ----------
-def delete_donor(donor_id):
-    conn = get_connection()
-    cur = conn.cursor()
-    cur.execute("DELETE FROM donor WHERE donor_id=%s", (donor_id,))
-    conn.commit()
-    conn.close()
-
-# ---------- UPDATE ----------
-def update_donor(donor_id, name, age, gender, blood, phone, address):
-    conn = get_connection()
-    cur = conn.cursor()
-    cur.execute(
-        """
-        UPDATE donor
-        SET name=%s, age=%s, gender=%s, blood_group=%s, phone=%s, address=%s
-        WHERE donor_id=%s
-        """,
-        (name, age, gender, blood, phone, address, donor_id)
-    )
-    conn.commit()
-    conn.close()
-
-# ---------- DASHBOARD ----------
-def dashboard_data():
-    conn = get_connection()
-    cur = conn.cursor(dictionary=True)
-
-    cur.execute("SELECT COUNT(*) AS total FROM donor")
-    total = cur.fetchone()["total"]
-
-    cur.execute("""
-        SELECT blood_group, COUNT(*) AS count
-        FROM donor
-        GROUP BY blood_group
-    """)
-    stats = cur.fetchall()
-
-    conn.close()
-    return total, stats
-=======
-import mysql.connector
+from db import get_db
+from google.cloud.firestore_v1.base_query import FieldFilter
 from datetime import date, timedelta
 
-# ---------- DB CONNECTION ----------
-def get_connection():
-    return mysql.connector.connect(
-        host="localhost",
-        user="root",
-        password="root123",     # change if needed
-        database="blood_bank_management"
-    )
 
-# ---------- DONOR ----------
+# ──────────────────────────────────────────────────────────────────────────────
+# DONORS
+# ──────────────────────────────────────────────────────────────────────────────
+
 def add_donor(name, age, blood_type, contact_no, address):
-    conn = get_connection()
-    cur = conn.cursor()
-    cur.execute("""
-        INSERT INTO donor (name, age, blood_type, contact_no, address)
-        VALUES (%s,%s,%s,%s,%s)
-    """, (name, age, blood_type, contact_no, address))
-    conn.commit()
-    conn.close()
+    db = get_db()
+    _, doc_ref = db.collection("donors").add({
+        "name": name,
+        "Age": age,
+        "blood_type": blood_type,
+        "contact_no": contact_no,
+        "address": address,
+    })
+    return doc_ref.id
+
 
 def get_all_donors():
-    conn = get_connection()
-    cur = conn.cursor(dictionary=True)
-    cur.execute("SELECT * FROM donor")
-    data = cur.fetchall()
-    conn.close()
-    return data
+    db = get_db()
+    return [{"donor_id": d.id, **d.to_dict()} for d in db.collection("donors").stream()]
+
+
+def search_by_blood(blood_type):
+    db = get_db()
+    docs = db.collection("donors").where(filter=FieldFilter("blood_type", "==", blood_type)).get()
+    return [{"donor_id": d.id, **d.to_dict()} for d in docs]
+
 
 def delete_donor(donor_id):
-    conn = get_connection()
-    cur = conn.cursor()
-    cur.execute("DELETE FROM donor WHERE donor_id=%s", (donor_id,))
-    conn.commit()
-    conn.close()
+    db = get_db()
+    db.collection("donors").document(donor_id).delete()
+    # Cascade: remove all donations for this donor
+    for don in db.collection("donations").where(filter=FieldFilter("donor_id", "==", donor_id)).get():
+        don.reference.delete()
+
 
 def update_donor(donor_id, name, age, blood_type, contact_no, address):
-    conn = get_connection()
-    cur = conn.cursor()
-    cur.execute("""
-        UPDATE donor
-        SET name=%s, age=%s, blood_type=%s, contact_no=%s, address=%s
-        WHERE donor_id=%s
-    """, (name, age, blood_type, contact_no, address, donor_id))
-    conn.commit()
-    conn.close()
+    db = get_db()
+    db.collection("donors").document(donor_id).update({
+        "name": name,
+        "Age": age,
+        "blood_type": blood_type,
+        "contact_no": contact_no,
+        "address": address,
+    })
 
 
-# ---------- DONATION + STOCK ----------
-def add_donation(donor_id, blood_bank_id, blood_type, quantity):
+# ──────────────────────────────────────────────────────────────────────────────
+# DONATIONS
+# ──────────────────────────────────────────────────────────────────────────────
 
-    conn = get_connection()
-    cur = conn.cursor()
+def add_donation(donor_id, blood_type, quantity):
+    db = get_db()
 
-    try:
-        # ✅ STEP 1: check donor exists (VERY IMPORTANT)
-        cur.execute("SELECT donor_id FROM donor WHERE donor_id=%s", (donor_id,))
-        donor = cur.fetchone()
+    # Verify donor exists
+    donor_doc = db.collection("donors").document(donor_id).get()
+    if not donor_doc.exists:
+        print("❌ Invalid donor ID! Donation cancelled.")
+        return None
 
-        if donor is None:
-            print("❌ Invalid donor ID! Donation cancelled.")
-            return
+    donor_name = donor_doc.to_dict().get("name", "")
+    today = date.today().isoformat()
 
-        # ✅ STEP 2: insert donation
-        cur.execute("""
-            INSERT INTO donation (donor_id, donation_date, quantity)
-            VALUES (%s, %s, %s)
-        """, (donor_id, date.today(), quantity))
-
-        # Expiry = 42 days
-        expiry_date = date.today() + timedelta(days=42)
-
-        # ✅ STEP 3: check stock
-        cur.execute("""
-            SELECT stock_id FROM blood_stock
-            WHERE blood_bank_id=%s AND blood_type=%s
-        """, (blood_bank_id, blood_type))
-
-        stock = cur.fetchone()
-
-        if stock:
-            cur.execute("""
-                UPDATE blood_stock
-                SET quantity = quantity + %s
-                WHERE blood_bank_id=%s AND blood_type=%s
-            """, (quantity, blood_bank_id, blood_type))
-        else:
-            cur.execute("""
-                INSERT INTO blood_stock
-                (blood_bank_id, blood_type, quantity, expiry_date)
-                VALUES (%s,%s,%s,%s)
-            """, (blood_bank_id, blood_type, quantity, expiry_date))
-
-        conn.commit()
-        print("✅ Donation added successfully")
-
-    except Exception as e:
-        conn.rollback()
-        print("❌ Error:", e)
-
-    finally:
-        conn.close()
+    _, doc_ref = db.collection("donations").add({
+        "donor_id": donor_id,
+        "donor_name": donor_name,
+        "blood_type": blood_type,
+        "donation_date": today,
+        "quantity": quantity,
+        "expiry_date": (date.today() + timedelta(days=42)).isoformat(),
+    })
+    print("✅ Donation added successfully")
+    return doc_ref.id
 
 
-# ---------- REQUEST ----------
-def create_request(recipient_id, blood_bank_id, blood_type, contact_no):
-    conn = get_connection()
-    cur = conn.cursor()
-    cur.execute("""
-        INSERT INTO request
-        (recipient_id, blood_bank_id, blood_type, request_date, status, contact_no)
-        VALUES (%s,%s,%s,CURDATE(),'Pending',%s)
-    """, (recipient_id, blood_bank_id, blood_type, contact_no))
-    conn.commit()
-    conn.close()
+# ──────────────────────────────────────────────────────────────────────────────
+# REQUESTS
+# ──────────────────────────────────────────────────────────────────────────────
+
+def create_request(recipient_id, blood_type, contact_no):
+    db = get_db()
+    recipient_name = ""
+    rec_doc = db.collection("recipients").document(recipient_id).get()
+    if rec_doc.exists:
+        recipient_name = rec_doc.to_dict().get("name", "")
+
+    _, doc_ref = db.collection("requests").add({
+        "recipient_id": recipient_id,
+        "recipient_name": recipient_name,
+        "blood_type": blood_type,
+        "request_date": date.today().isoformat(),
+        "contact_no": contact_no,
+        "status": "PENDING",
+    })
+    return doc_ref.id
+
 
 def get_requests():
-    conn = get_connection()
-    cur = conn.cursor(dictionary=True)
-    cur.execute("SELECT * FROM request")
-    data = cur.fetchall()
-    conn.close()
-    return data
+    db = get_db()
+    return [{"request_id": d.id, **d.to_dict()} for d in db.collection("requests").stream()]
+
 
 def fulfill_request(request_id):
-    conn = get_connection()
-    cur = conn.cursor(dictionary=True)
+    db = get_db()
+    req_doc = db.collection("requests").document(request_id).get()
+    if not req_doc.exists:
+        print("❌ Request not found")
+        return
+    db.collection("requests").document(request_id).update({"status": "APPROVED"})
+    print("✅ Request approved")
 
-    cur.execute("""
-        SELECT blood_bank_id, blood_type
-        FROM request
-        WHERE request_id=%s
-    """, (request_id,))
-    req = cur.fetchone()
 
-    cur.execute("""
-        UPDATE blood_stock
-        SET quantity = quantity - 1
-        WHERE blood_bank_id=%s AND blood_type=%s AND quantity > 0
-    """, (req["blood_bank_id"], req["blood_type"]))
+# ──────────────────────────────────────────────────────────────────────────────
+# DASHBOARD
+# ──────────────────────────────────────────────────────────────────────────────
 
-    cur.execute("""
-        UPDATE request SET status='Approved'
-        WHERE request_id=%s
-    """, (request_id,))
-
-    conn.commit()
-    conn.close()
-
-# ---------- DASHBOARD ----------
 def dashboard_data():
-    conn = get_connection()
-    cur = conn.cursor(dictionary=True)
+    db = get_db()
+    donors = list(db.collection("donors").stream())
+    total_donors = len(donors)
 
-    cur.execute("SELECT COUNT(*) AS total FROM donor")
-    total_donors = cur.fetchone()["total"]
+    donations = [d.to_dict() for d in db.collection("donations").stream()]
 
-    cur.execute("""
-        SELECT blood_type, SUM(quantity) AS units
-        FROM blood_stock
-        GROUP BY blood_type
-    """)
-    stock = cur.fetchall()
+    stock = {}
+    for don in donations:
+        bt = don.get("blood_type", "Unknown")
+        stock[bt] = stock.get(bt, 0) + don.get("quantity", 0)
 
-    conn.close()
-    return total_donors, stock
->>>>>>> e7ebdeb (All changes implemented)
+    stock_list = [{"blood_type": bt, "units": units} for bt, units in sorted(stock.items())]
+    return total_donors, stock_list

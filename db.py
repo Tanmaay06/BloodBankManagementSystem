@@ -1,77 +1,41 @@
-<<<<<<< HEAD
-import mysql.connector
-
-def get_connection():
-    return mysql.connector.connect(
-        host="localhost",
-        user="root",
-        password="root123",
-        database="blood_donation_db"
-    )
-=======
-import mysql.connector
+import firebase_admin
+from firebase_admin import credentials, firestore, auth as firebase_auth
 import os
-
-def get_connection():
-    return mysql.connector.connect(
-        host=os.environ.get("DB_HOST", "localhost"),
-        user=os.environ.get("DB_USER", "root"),
-        password=os.environ.get("DB_PASSWORD", "root123"),
-      database=os.environ.get("DB_NAME", "blood_bank")
-    )
+import json
 
 
+def _init_firebase():
+    """Initialize Firebase Admin SDK (idempotent).
 
-def init_db():
-    conn = get_connection()
-    cursor = conn.cursor()
+    - Local dev:  reads the JSON key file at FIREBASE_CREDENTIALS_PATH
+                  (defaults to 'firebase_credentials.json')
+    - Production: reads the entire JSON from FIREBASE_CREDENTIALS_JSON
+                  env variable (set in Vercel / any serverless host)
+    """
+    if firebase_admin._apps:
+        return  # Already initialized
 
-    cursor.execute("""
-        CREATE TABLE IF NOT EXISTS donor (
-            donor_id INT AUTO_INCREMENT PRIMARY KEY,
-            name VARCHAR(100) NOT NULL,
-            blood_type VARCHAR(30) NOT NULL,
-            contact_no VARCHAR(20),
-            address VARCHAR(255),
-            Age INT
-        )
-    """)
+    json_str = os.environ.get("FIREBASE_CREDENTIALS_JSON")
+    if json_str:
+        # Serverless / Vercel path — credentials stored as env var
+        cred_dict = json.loads(json_str)
+        cred = credentials.Certificate(cred_dict)
+    else:
+        # Local dev path — credentials stored as a JSON file
+        cred_path = os.environ.get("FIREBASE_CREDENTIALS_PATH", "firebase_credentials.json")
+        cred = credentials.Certificate(cred_path)
 
-    cursor.execute("""
-        CREATE TABLE IF NOT EXISTS donation (
-            donation_id INT AUTO_INCREMENT PRIMARY KEY,
-            donor_id INT NOT NULL,
-            donation_date DATE NOT NULL,
-            quatity INT DEFAULT 1,
-            FOREIGN KEY (donor_id) REFERENCES donor(donor_id) ON DELETE CASCADE
-        )
-    """)
+    firebase_admin.initialize_app(cred)
 
-    cursor.execute("""
-        CREATE TABLE IF NOT EXISTS recipient (
-            recipient_id INT AUTO_INCREMENT PRIMARY KEY,
-            name VARCHAR(100) NOT NULL,
-            blood_type VARCHAR(30) NOT NULL,
-            contact_no VARCHAR(20),
-            address VARCHAR(255),
-            created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
-        )
-    """)
 
-    cursor.execute("""
-        CREATE TABLE IF NOT EXISTS request (
-            request_id INT AUTO_INCREMENT PRIMARY KEY,
-            recipient_id INT NOT NULL,
-            blood_type VARCHAR(30) NOT NULL,
-            request_date DATE NOT NULL,
-            contact_no VARCHAR(20),
-            status ENUM('Pending','Approved','Fulfilled') DEFAULT 'Pending',
-            created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-            FOREIGN KEY (recipient_id) REFERENCES recipient(recipient_id) ON DELETE CASCADE
-        )
-    """)
+_init_firebase()
 
-    conn.commit()
-    cursor.close()
-    conn.close()
->>>>>>> e7ebdeb (All changes implemented)
+
+def get_db():
+    """Returns the Firestore client."""
+    return firestore.client()
+
+
+def get_auth():
+    """Returns the Firebase Auth module."""
+    return firebase_auth

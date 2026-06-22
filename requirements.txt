@@ -1,9 +1,7 @@
-<<<<<<< HEAD
-streamlit
-mysql-connector-python
-pandas
-=======
-streamlit
-mysql-connector-python
-pandas
->>>>>>> e7ebdeb (All changes implemented)
+Flask==3.0.3
+flask-cors==4.0.0
+Werkzeug==3.0.3
+firebase-admin==6.5.0
+requests==2.31.0
+python-dotenv==1.0.1
+gunicorn==22.0.0

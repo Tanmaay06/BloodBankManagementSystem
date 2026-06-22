@@ -1,254 +1,277 @@
-<<<<<<< HEAD
-import streamlit as st
-import pandas as pd
-from donor_service import (
-    add_donor,
-    get_all_donors,
-    delete_donor,
-    update_donor,
-    dashboard_data
-)
-
-st.set_page_config(page_title="Blood Donation System", layout="wide")
-st.title("🩸 Blood Donation System")
-
-menu = st.sidebar.radio(
-    "Menu",
-    ["Dashboard", "Add Donor", "View Donors", "Update Donor"]
-)
-
-# ================= DASHBOARD =================
-if menu == "Dashboard":
-    st.subheader("📊 Dashboard")
-
-    total, blood_stats = dashboard_data()
-
-    col1, col2 = st.columns(2)
-    col1.metric("👥 Total Donors", total)
-
-    df_stats = pd.DataFrame(blood_stats)
-    df_stats = df_stats.set_index("blood_group")
-    col2.bar_chart(df_stats)
-
-# ================= ADD DONOR =================
-elif menu == "Add Donor":
-    st.subheader("➕ Add Donor")
-
-    name = st.text_input("Name")
-    age = st.number_input("Age", 18, 65)
-    gender = st.selectbox("Gender", ["Male", "Female", "Other"])
-    blood = st.selectbox("Blood Group", ["A+","A-","B+","B-","O+","O-","AB+","AB-"])
-    phone = st.text_input("Phone")
-    address = st.text_input("Address")
-
-    if st.button("Add Donor"):
-        if name and phone:
-            add_donor(name, age, gender, blood, phone, address)
-            st.success("✅ Donor added successfully")
-            st.experimental_rerun()
-        else:
-            st.error("❌ Name and Phone required")
-
-# ================= VIEW + DELETE =================
-elif menu == "View Donors":
-    st.subheader("📋 All Donors")
-
-    df = pd.DataFrame(get_all_donors())
-
-    if df.empty:
-        st.warning("No donors found")
-    else:
-        st.dataframe(df, width="stretch")
-
-        st.subheader("🗑 Delete Donor")
-        donor_id = st.selectbox("Select Donor ID", df["donor_id"])
-
-        if st.button("Delete Selected Donor"):
-            delete_donor(donor_id)
-            st.success("✅ Donor deleted")
-            st.experimental_rerun()
-
-# ================= UPDATE DONOR =================
-elif menu == "Update Donor":
-    st.subheader("✏️ Update Donor")
-
-    df = pd.DataFrame(get_all_donors())
-
-    if df.empty:
-        st.warning("No donors available")
-    else:
-        donor_id = st.selectbox("Select Donor ID", df["donor_id"])
-        donor = df[df["donor_id"] == donor_id].iloc[0]
-
-        name = st.text_input("Name", donor["name"])
-        age = st.number_input("Age", 18, 65, donor["age"])
-        gender = st.selectbox(
-            "Gender", ["Male", "Female", "Other"],
-            index=["Male","Female","Other"].index(donor["gender"])
-        )
-        blood = st.selectbox(
-            "Blood Group",
-            ["A+","A-","B+","B-","O+","O-","AB+","AB-"],
-            index=["A+","A-","B+","B-","O+","O-","AB+","AB-"].index(donor["blood_group"])
-        )
-        phone = st.text_input("Phone", donor["phone"])
-        address = st.text_input("Address", donor["address"])
-
-        if st.button("Update Donor"):
-            update_donor(donor_id, name, age, gender, blood, phone, address)
-            st.success("✅ Donor updated")
-            st.experimental_rerun()
-=======
 from flask import Flask, jsonify, request, send_from_directory
 from flask_cors import CORS
-from db import get_connection, init_db
-from datetime import date
+from db import get_db, get_auth
+from google.cloud.firestore_v1.base_query import FieldFilter
+from datetime import datetime
 import os
+import requests as http_requests
+from dotenv import load_dotenv
+
+load_dotenv()  # Load .env variables (FIREBASE_API_KEY, SECRET_KEY, etc.)
+
 
 app = Flask(__name__, static_folder="static", static_url_path="")
+app.secret_key = os.environ.get("SECRET_KEY", "dev-insecure-key-change-in-prod")
 CORS(app)
 
-with app.app_context():
+# Firebase Web API Key — required for the REST sign-in endpoint
+FIREBASE_API_KEY = os.environ.get("FIREBASE_API_KEY", "")
+
+
+def _make_email(username: str) -> str:
+    """Convert a plain username to a deterministic Firebase Auth email."""
+    return f"{username}@bloodbank.app"
+
+
+# ══════════════════════════════════════════════════════════════════════════════
+# AUTHENTICATION
+# ══════════════════════════════════════════════════════════════════════════════
+
+@app.route("/api/signup", methods=["POST"])
+def signup():
+    data = request.get_json()
+    username = data.get("username")
+    password = data.get("password")
+    role = data.get("role", "Donor")
+
+    if not username or not password:
+        return jsonify({"error": "Username and password are required"}), 400
+    if role not in ("admin", "Donor", "Recipient"):
+        return jsonify({"error": "Invalid role"}), 400
+
+    auth = get_auth()
+    db = get_db()
+    email = _make_email(username)
+
     try:
-        init_db()
+        # Create the user in Firebase Authentication
+        user = auth.create_user(email=email, password=password, display_name=username)
+        uid = user.uid
+
+        # Store the role & metadata in Firestore
+        db.collection("users").document(uid).set({
+            "username": username,
+            "role": role,
+            "created_at": datetime.utcnow().isoformat()
+        })
+
+        # Auto-create a profile document in the matching collection
+        if role == "Donor":
+            existing = list(db.collection("donors").where(filter=FieldFilter("name", "==", username)).limit(1).get())
+            if not existing:
+                db.collection("donors").add({
+                    "name": username,
+                    "blood_type": "A+",
+                    "contact_no": "",
+                    "address": "",
+                    "Age": 18
+                })
+        elif role == "Recipient":
+            existing = list(db.collection("recipients").where(filter=FieldFilter("name", "==", username)).limit(1).get())
+            if not existing:
+                db.collection("recipients").add({
+                    "name": username,
+                    "blood_type": "A+",
+                    "contact_no": "",
+                    "address": "",
+                    "created_at": datetime.utcnow().isoformat()
+                })
+
+        return jsonify({"message": "User created successfully", "role": role}), 201
+
     except Exception as e:
-        print(f"DB init warning: {e}")
+        error_msg = str(e)
+        if "EMAIL_EXISTS" in error_msg or "already exists" in error_msg.lower():
+            return jsonify({"error": "Username already exists or database error"}), 400
+        return jsonify({"error": "Username already exists or database error"}), 400
+
+
+@app.route("/api/login", methods=["POST"])
+def login():
+    data = request.get_json()
+    username = data.get("username")
+    password = data.get("password")
+    role = data.get("role")
+
+    if not username or not password or not role:
+        return jsonify({"error": "Username, password and role are required"}), 400
+
+    email = _make_email(username)
+
+    # Sign in via Firebase Auth REST API (Admin SDK cannot verify passwords)
+    try:
+        resp = http_requests.post(
+            f"https://identitytoolkit.googleapis.com/v1/accounts:signInWithPassword?key={FIREBASE_API_KEY}",
+            json={"email": email, "password": password, "returnSecureToken": True},
+            timeout=10
+        )
+        resp_data = resp.json()
+        if resp.status_code != 200:
+            return jsonify({"error": "Invalid credentials"}), 401
+        uid = resp_data.get("localId")
+    except Exception as e:
+        return jsonify({"error": f"Auth service error: {str(e)}"}), 500
+
+    # Verify the role stored in Firestore matches the requested role
+    db = get_db()
+    user_doc = db.collection("users").document(uid).get()
+    if not user_doc.exists:
+        return jsonify({"error": "Invalid credentials"}), 401
+
+    user_data = user_doc.to_dict()
+    if user_data.get("role") != role:
+        return jsonify({"error": "Invalid credentials"}), 401
+
+    return jsonify({"message": "Login successful", "username": username, "role": role}), 200
 
 
 # ══════════════════════════════════════════════════════════════════════════════
 # DASHBOARD
 # ══════════════════════════════════════════════════════════════════════════════
+
 @app.route("/api/dashboard", methods=["GET"])
 def dashboard():
-    conn = get_connection()
-    cursor = conn.cursor(dictionary=True)
-    try:
-        cursor.execute("SELECT COUNT(*) AS total_donors FROM donor")
-        total_donors = cursor.fetchone()["total_donors"]
+    db = get_db()
 
-        cursor.execute("SELECT COUNT(*) AS total_donations FROM donation")
-        total_donations = cursor.fetchone()["total_donations"]
+    # Donors
+    donors = [{"donor_id": d.id, **d.to_dict()} for d in db.collection("donors").stream()]
+    total_donors = len(donors)
 
-        cursor.execute("SELECT COALESCE(SUM(quatity), 0) AS total_units FROM donation")
-        total_units = float(cursor.fetchone()["total_units"])
+    # Donations
+    donations = [{"donation_id": d.id, **d.to_dict()} for d in db.collection("donations").stream()]
+    total_donations = len(donations)
+    total_units = float(sum(don.get("quantity", 0) for don in donations))
 
-        cursor.execute("SELECT COUNT(*) AS cnt FROM request WHERE status='PENDING'")
-        pending_requests = cursor.fetchone()["cnt"]
+    # Pending requests
+    pending_docs = db.collection("requests").where(filter=FieldFilter("status", "==", "PENDING")).get()
+    pending_requests = len(list(pending_docs))
 
-        cursor.execute("SELECT blood_type, COUNT(*) AS count FROM donor GROUP BY blood_type ORDER BY blood_type")
-        blood_type_dist = cursor.fetchall()
+    # Blood-type distribution (from donors)
+    blood_type_dist = {}
+    for d in donors:
+        bt = d.get("blood_type", "Unknown")
+        blood_type_dist[bt] = blood_type_dist.get(bt, 0) + 1
+    blood_type_dist_list = [
+        {"blood_type": k, "count": v}
+        for k, v in sorted(blood_type_dist.items())
+    ]
 
-        cursor.execute("""
-            SELECT d.name, don.donation_date, don.quatity
-            FROM donation don JOIN donor d ON don.donor_id = d.donor_id
-            ORDER BY don.donation_date DESC LIMIT 5
-        """)
-        recent_donations = cursor.fetchall()
-        for r in recent_donations:
-            if isinstance(r["donation_date"], date):
-                r["donation_date"] = r["donation_date"].isoformat()
+    # Recent donations (last 5, sorted by date descending)
+    recent_sorted = sorted(donations, key=lambda x: x.get("donation_date", ""), reverse=True)[:5]
+    recent_donations = [
+        {
+            "name": d.get("donor_name", ""),
+            "donation_date": d.get("donation_date", ""),
+            "quantity": d.get("quantity", 1)
+        }
+        for d in recent_sorted
+    ]
 
-        cursor.execute("""
-            SELECT d.blood_type,
-                   COUNT(DISTINCT don.donation_id) AS donation_count,
-                   COALESCE(SUM(don.quatity), 0) AS total_units
-            FROM donor d LEFT JOIN donation don ON don.donor_id = d.donor_id
-            GROUP BY d.blood_type
-        """)
-        blood_inventory = cursor.fetchall()
-        for b in blood_inventory:
-            b["total_units"] = float(b["total_units"])
+    # Blood inventory — aggregate by blood_type
+    inventory_map = {}
+    for d in donors:
+        bt = d.get("blood_type", "Unknown")
+        if bt not in inventory_map:
+            inventory_map[bt] = {"donor_ids": set(), "total_units": 0.0, "donation_count": 0}
+        inventory_map[bt]["donor_ids"].add(d["donor_id"])
 
-        return jsonify({
-            "total_donors": total_donors,
-            "total_donations": total_donations,
-            "total_units": total_units,
-            "pending_requests": pending_requests,
-            "blood_type_distribution": blood_type_dist,
-            "recent_donations": recent_donations,
-            "blood_inventory": blood_inventory
-        })
-    finally:
-        cursor.close()
-        conn.close()
+    for don in donations:
+        bt = don.get("blood_type", "Unknown")
+        if bt not in inventory_map:
+            inventory_map[bt] = {"donor_ids": set(), "total_units": 0.0, "donation_count": 0}
+        inventory_map[bt]["total_units"] += float(don.get("quantity", 0))
+        inventory_map[bt]["donation_count"] += 1
+
+    blood_inventory = [
+        {
+            "blood_type": bt,
+            "donor_count": len(data["donor_ids"]),
+            "donation_count": data["donation_count"],
+            "total_units": data["total_units"]
+        }
+        for bt, data in sorted(inventory_map.items())
+    ]
+
+    return jsonify({
+        "total_donors": total_donors,
+        "total_donations": total_donations,
+        "total_units": total_units,
+        "pending_requests": pending_requests,
+        "blood_type_distribution": blood_type_dist_list,
+        "recent_donations": recent_donations,
+        "blood_inventory": blood_inventory
+    })
 
 
 # ══════════════════════════════════════════════════════════════════════════════
 # DONORS
 # ══════════════════════════════════════════════════════════════════════════════
+
 @app.route("/api/donors", methods=["GET"])
 def get_donors():
-    from urllib.parse import unquote, unquote_plus
-    # Read raw query string and decode %2B as + (not space)
+    from urllib.parse import unquote
+    # Preserve + signs in blood types (URL encoding quirk)
     raw = request.environ.get('QUERY_STRING', '')
     search = ""
     for part in raw.split('&'):
         if part.startswith('search='):
             val = part[7:]
-            # decode %2B -> + first, then decode everything else
             search = unquote(val.replace('%2B', '+')).strip()
             break
-    # Also handle case where frontend sends literal + (decoded as space by Flask)
-    # Try request.args as fallback and restore +
     if not search:
         search = request.args.get("search", "").strip()
     age_min = request.args.get("age_min", "").strip()
     age_max = request.args.get("age_max", "").strip()
-    conn = get_connection()
-    cursor = conn.cursor(dictionary=True)
-    try:
-        query = "SELECT * FROM donor WHERE 1=1"
-        params = []
-        if search:
-            s_upper = search.upper()
-            blood_types = ["A+","A-","B+","B-","AB+","AB-","O+","O-"]
-            if s_upper in blood_types:
-                # exact blood type match
-                query += " AND UPPER(blood_type) = %s"
-                params += [s_upper]
-            else:
-                like = f"%{search}%"
-                query += """ AND (
-                    name LIKE %s OR
-                    contact_no LIKE %s OR
-                    address LIKE %s OR
-                    CAST(donor_id AS CHAR) LIKE %s OR
-                    UPPER(blood_type) LIKE %s
-                )"""
-                params += [like, like, like, like, f"%{s_upper}%"]
-        if age_min:
-            query += " AND Age >= %s"
-            params += [int(age_min)]
-        if age_max:
-            query += " AND Age <= %s"
-            params += [int(age_max)]
-        query += " ORDER BY donor_id DESC"
-        cursor.execute(query, params)
-        return jsonify(cursor.fetchall())
-    finally:
-        cursor.close()
-        conn.close()
+
+    db = get_db()
+    donors = [{"donor_id": d.id, **d.to_dict()} for d in db.collection("donors").stream()]
+
+    # Client-side filtering (Firestore doesn't support ILIKE / full-text search)
+    if search:
+        s_upper = search.upper()
+        blood_types = ["A+", "A-", "B+", "B-", "AB+", "AB-", "O+", "O-"]
+        if s_upper in blood_types:
+            donors = [d for d in donors if d.get("blood_type", "").upper() == s_upper]
+        else:
+            s_lower = search.lower()
+            donors = [d for d in donors if (
+                s_lower in str(d.get("name", "")).lower() or
+                s_lower in str(d.get("contact_no", "")).lower() or
+                s_lower in str(d.get("address", "")).lower() or
+                s_lower in str(d.get("donor_id", "")).lower() or
+                s_upper in str(d.get("blood_type", "")).upper()
+            )]
+
+    if age_min:
+        try:
+            donors = [d for d in donors
+                      if d.get("Age") is not None and int(d.get("Age", 0)) >= int(age_min)]
+        except ValueError:
+            pass
+    if age_max:
+        try:
+            donors = [d for d in donors
+                      if d.get("Age") is not None and int(d.get("Age", 0)) <= int(age_max)]
+        except ValueError:
+            pass
+
+    donors = sorted(donors, key=lambda d: d.get("donor_id", ""), reverse=True)
+    return jsonify(donors)
 
 
-@app.route("/api/donors/<int:donor_id>", methods=["GET"])
+@app.route("/api/donors/<donor_id>", methods=["GET"])
 def get_donor(donor_id):
-    conn = get_connection()
-    cursor = conn.cursor(dictionary=True)
-    try:
-        cursor.execute("SELECT * FROM donor WHERE donor_id = %s", (donor_id,))
-        donor = cursor.fetchone()
-        if not donor:
-            return jsonify({"error": "Donor not found"}), 404
-        cursor.execute("SELECT * FROM donation WHERE donor_id = %s ORDER BY donation_date DESC", (donor_id,))
-        donations = cursor.fetchall()
-        for d in donations:
-            if isinstance(d.get("donation_date"), date):
-                d["donation_date"] = d["donation_date"].isoformat()
-        donor["donations"] = donations
-        return jsonify(donor)
-    finally:
-        cursor.close()
-        conn.close()
+    db = get_db()
+    doc = db.collection("donors").document(donor_id).get()
+    if not doc.exists:
+        return jsonify({"error": "Donor not found"}), 404
+
+    donor = {"donor_id": doc.id, **doc.to_dict()}
+    donations_docs = db.collection("donations").where(filter=FieldFilter("donor_id", "==", donor_id)).get()
+    donations = [{"donation_id": d.id, **d.to_dict()} for d in donations_docs]
+    donations = sorted(donations, key=lambda x: x.get("donation_date", ""), reverse=True)
+    donor["donations"] = donations
+    return jsonify(donor)
 
 
 @app.route("/api/donors", methods=["POST"])
@@ -256,83 +279,73 @@ def add_donor():
     data = request.get_json()
     if not data.get("name") or not data.get("blood_type"):
         return jsonify({"error": "name and blood_type are required"}), 400
-    conn = get_connection()
-    cursor = conn.cursor()
-    try:
-        cursor.execute("""
-            INSERT INTO donor (name, blood_type, contact_no, address, Age)
-            VALUES (%s, %s, %s, %s, %s)
-        """, (data["name"], data["blood_type"], data.get("contact_no"), data.get("address"), data.get("Age")))
-        conn.commit()
-        return jsonify({"id": cursor.lastrowid, "message": "Donor added"}), 201
-    finally:
-        cursor.close()
-        conn.close()
+
+    db = get_db()
+    _, doc_ref = db.collection("donors").add({
+        "name": data["name"],
+        "blood_type": data["blood_type"],
+        "contact_no": data.get("contact_no", ""),
+        "address": data.get("address", ""),
+        "Age": data.get("Age")
+    })
+    return jsonify({"id": doc_ref.id, "message": "Donor added"}), 201
 
 
-@app.route("/api/donors/<int:donor_id>", methods=["PUT"])
+@app.route("/api/donors/<donor_id>", methods=["PUT"])
 def update_donor(donor_id):
     data = request.get_json()
-    conn = get_connection()
-    cursor = conn.cursor()
+    age_val = data.get("Age")
+    if age_val == "":
+        age_val = None
+
+    db = get_db()
+    doc_ref = db.collection("donors").document(donor_id)
+    if not doc_ref.get().exists:
+        return jsonify({"error": "Donor not found"}), 404
+
     try:
-        cursor.execute("""
-            UPDATE donor SET name=%s, blood_type=%s, contact_no=%s, address=%s, Age=%s
-            WHERE donor_id=%s
-        """, (data.get("name"), data.get("blood_type"), data.get("contact_no"), data.get("address"), data.get("Age"), donor_id))
-        conn.commit()
-        if cursor.rowcount == 0:
-            return jsonify({"error": "Donor not found"}), 404
+        doc_ref.update({
+            "name": data.get("name"),
+            "blood_type": data.get("blood_type"),
+            "contact_no": data.get("contact_no", ""),
+            "address": data.get("address", ""),
+            "Age": age_val
+        })
         return jsonify({"message": "Donor updated"})
-    finally:
-        cursor.close()
-        conn.close()
+    except Exception as e:
+        return jsonify({"error": str(e)}), 500
 
 
-@app.route("/api/donors/<int:donor_id>", methods=["DELETE"])
+@app.route("/api/donors/<donor_id>", methods=["DELETE"])
 def delete_donor(donor_id):
-    conn = get_connection()
-    cursor = conn.cursor()
-    try:
-        cursor.execute("DELETE FROM donor WHERE donor_id = %s", (donor_id,))
-        conn.commit()
-        if cursor.rowcount == 0:
-            return jsonify({"error": "Donor not found"}), 404
-        return jsonify({"message": "Donor deleted"})
-    finally:
-        cursor.close()
-        conn.close()
+    db = get_db()
+    doc_ref = db.collection("donors").document(donor_id)
+    if not doc_ref.get().exists:
+        return jsonify({"error": "Donor not found"}), 404
+    doc_ref.delete()
+    # Cascade: remove all donations belonging to this donor
+    for don in db.collection("donations").where(filter=FieldFilter("donor_id", "==", donor_id)).get():
+        don.reference.delete()
+    return jsonify({"message": "Donor deleted"})
 
 
 # ══════════════════════════════════════════════════════════════════════════════
 # DONATIONS
 # ══════════════════════════════════════════════════════════════════════════════
+
 @app.route("/api/donations", methods=["GET"])
 def get_donations():
     donor_id = request.args.get("donor_id")
-    conn = get_connection()
-    cursor = conn.cursor(dictionary=True)
-    try:
-        if donor_id:
-            cursor.execute("""
-                SELECT don.*, d.name AS donor_name, d.blood_type
-                FROM donation don JOIN donor d ON don.donor_id = d.donor_id
-                WHERE don.donor_id = %s ORDER BY don.donation_date DESC
-            """, (donor_id,))
-        else:
-            cursor.execute("""
-                SELECT don.*, d.name AS donor_name, d.blood_type
-                FROM donation don JOIN donor d ON don.donor_id = d.donor_id
-                ORDER BY don.donation_date DESC
-            """)
-        donations = cursor.fetchall()
-        for d in donations:
-            if isinstance(d.get("donation_date"), date):
-                d["donation_date"] = d["donation_date"].isoformat()
-        return jsonify(donations)
-    finally:
-        cursor.close()
-        conn.close()
+    db = get_db()
+
+    if donor_id:
+        docs = db.collection("donations").where(filter=FieldFilter("donor_id", "==", donor_id)).get()
+    else:
+        docs = db.collection("donations").stream()
+
+    donations = [{"donation_id": d.id, **d.to_dict()} for d in docs]
+    donations = sorted(donations, key=lambda x: x.get("donation_date", ""), reverse=True)
+    return jsonify(donations)
 
 
 @app.route("/api/donations", methods=["POST"])
@@ -340,63 +353,71 @@ def add_donation():
     data = request.get_json()
     if not data.get("donor_id") or not data.get("donation_date"):
         return jsonify({"error": "donor_id and donation_date are required"}), 400
-    conn = get_connection()
-    cursor = conn.cursor()
-    try:
-        cursor.execute("""
-            INSERT INTO donation (donor_id, donation_date, quatity)
-            VALUES (%s, %s, %s)
-        """, (data["donor_id"], data["donation_date"], data.get("quatity", 1)))
-        conn.commit()
-        return jsonify({"id": cursor.lastrowid, "message": "Donation recorded"}), 201
-    finally:
-        cursor.close()
-        conn.close()
+
+    db = get_db()
+    donor_id = data["donor_id"]
+
+    # Denormalize donor info so dashboard/inventory queries need fewer reads
+    donor_name = ""
+    blood_type = ""
+    donor_doc = db.collection("donors").document(donor_id).get()
+    if donor_doc.exists:
+        donor_data = donor_doc.to_dict()
+        donor_name = donor_data.get("name", "")
+        blood_type = donor_data.get("blood_type", "")
+
+    _, doc_ref = db.collection("donations").add({
+        "donor_id": donor_id,
+        "donor_name": donor_name,
+        "blood_type": blood_type,
+        "donation_date": data["donation_date"],
+        "quantity": data.get("quantity", 1)
+    })
+    return jsonify({"id": doc_ref.id, "message": "Donation recorded"}), 201
 
 
-@app.route("/api/donations/<int:donation_id>", methods=["DELETE"])
+@app.route("/api/donations/<donation_id>", methods=["DELETE"])
 def delete_donation(donation_id):
-    conn = get_connection()
-    cursor = conn.cursor()
-    try:
-        cursor.execute("DELETE FROM donation WHERE donation_id = %s", (donation_id,))
-        conn.commit()
-        if cursor.rowcount == 0:
-            return jsonify({"error": "Not found"}), 404
-        return jsonify({"message": "Deleted"})
-    finally:
-        cursor.close()
-        conn.close()
+    db = get_db()
+    doc_ref = db.collection("donations").document(donation_id)
+    if not doc_ref.get().exists:
+        return jsonify({"error": "Not found"}), 404
+    doc_ref.delete()
+    return jsonify({"message": "Deleted"})
 
 
 # ══════════════════════════════════════════════════════════════════════════════
 # INVENTORY
 # ══════════════════════════════════════════════════════════════════════════════
+
 @app.route("/api/inventory", methods=["GET"])
 def get_inventory():
-    conn = get_connection()
-    cursor = conn.cursor(dictionary=True)
-    try:
-        cursor.execute("""
-            SELECT d.blood_type,
-                   COUNT(DISTINCT d.donor_id) AS donor_count,
-                   COUNT(don.donation_id) AS donation_count,
-                   COALESCE(SUM(don.quatity), 0) AS total_units
-            FROM donor d LEFT JOIN donation don ON don.donor_id = d.donor_id
-            GROUP BY d.blood_type ORDER BY d.blood_type
-        """)
-        inventory = cursor.fetchall()
-        for item in inventory:
-            item["total_units"] = float(item["total_units"])
-        return jsonify(inventory)
-    finally:
-        cursor.close()
-        conn.close()
+    db = get_db()
+    donors = [{"donor_id": d.id, **d.to_dict()} for d in db.collection("donors").stream()]
+    donations = [{"donation_id": d.id, **d.to_dict()} for d in db.collection("donations").stream()]
+
+    inventory_map = {}
+    for donor in donors:
+        bt = donor.get("blood_type", "Unknown")
+        if bt not in inventory_map:
+            inventory_map[bt] = {"blood_type": bt, "donor_count": 0, "donation_count": 0, "total_units": 0.0}
+        inventory_map[bt]["donor_count"] += 1
+
+    for don in donations:
+        bt = don.get("blood_type", "Unknown")
+        if bt not in inventory_map:
+            inventory_map[bt] = {"blood_type": bt, "donor_count": 0, "donation_count": 0, "total_units": 0.0}
+        inventory_map[bt]["donation_count"] += 1
+        inventory_map[bt]["total_units"] += float(don.get("quantity", 0))
+
+    inventory = sorted(inventory_map.values(), key=lambda x: x["blood_type"])
+    return jsonify(inventory)
 
 
 # ══════════════════════════════════════════════════════════════════════════════
-# RECIPIENTS — table is "recepient", PK is "recepient_id", contact is "phone_no"
+# RECIPIENTS
 # ══════════════════════════════════════════════════════════════════════════════
+
 @app.route("/api/recipients", methods=["GET"])
 def get_recipients():
     from urllib.parse import unquote
@@ -409,33 +430,29 @@ def get_recipients():
             break
     if not search:
         search = request.args.get("search", "").strip()
-    conn = get_connection()
-    cursor = conn.cursor(dictionary=True)
-    try:
-        query = "SELECT * FROM recepient WHERE 1=1"
-        params = []
-        if search:
-            s_upper = search.upper()
-            blood_types = ["A+","A-","B+","B-","AB+","AB-","O+","O-"]
-            if s_upper in blood_types:
-                query += " AND UPPER(blood_type) = %s"
-                params += [s_upper]
-            else:
-                query += " AND (name LIKE %s OR phone_no LIKE %s OR address LIKE %s OR CAST(recepient_id AS CHAR) LIKE %s OR UPPER(blood_type) LIKE %s)"
-                like = f"%{search}%"
-                like = f"%{search}%"
-                params += [like, like, like, like, f"%{s_upper}%"]
-        query += " ORDER BY recepient_id DESC"
-        cursor.execute(query, params)
-        rows = cursor.fetchall()
-        # normalize key names for frontend
-        for r in rows:
-            r["recipient_id"] = r.pop("recepient_id")
-            r["contact_no"] = r.pop("phone_no", "")
-        return jsonify(rows)
-    finally:
-        cursor.close()
-        conn.close()
+
+    db = get_db()
+    recipients = [{"recipient_id": d.id, **d.to_dict()} for d in db.collection("recipients").stream()]
+
+    if search:
+        s_upper = search.upper()
+        blood_types = ["A+", "A-", "B+", "B-", "AB+", "AB-", "O+", "O-"]
+        if s_upper in blood_types:
+            recipients = [r for r in recipients if r.get("blood_type", "").upper() == s_upper]
+        else:
+            s_lower = search.lower()
+            recipients = [r for r in recipients if (
+                s_lower in str(r.get("name", "")).lower() or
+                s_lower in str(r.get("contact_no", "")).lower() or
+                s_lower in str(r.get("address", "")).lower() or
+                s_lower in str(r.get("recipient_id", "")).lower() or
+                s_upper in str(r.get("blood_type", "")).upper()
+            )]
+
+    recipients = sorted(recipients, key=lambda r: r.get("recipient_id", ""), reverse=True)
+    for r in recipients:
+        r["contact_no"] = r.get("contact_no", "")
+    return jsonify(recipients)
 
 
 @app.route("/api/recipients", methods=["POST"])
@@ -443,82 +460,60 @@ def add_recipient():
     data = request.get_json()
     if not data.get("name") or not data.get("blood_type"):
         return jsonify({"error": "name and blood_type are required"}), 400
-    conn = get_connection()
-    cursor = conn.cursor()
-    try:
-        cursor.execute("""
-            INSERT INTO recepient (name, blood_type, phone_no, address)
-            VALUES (%s, %s, %s, %s)
-        """, (data["name"], data["blood_type"], data.get("contact_no"), data.get("address")))
-        conn.commit()
-        return jsonify({"id": cursor.lastrowid, "message": "Recipient added"}), 201
-    finally:
-        cursor.close()
-        conn.close()
+
+    db = get_db()
+    _, doc_ref = db.collection("recipients").add({
+        "name": data["name"],
+        "blood_type": data["blood_type"],
+        "contact_no": data.get("contact_no", ""),
+        "address": data.get("address", ""),
+        "created_at": datetime.utcnow().isoformat()
+    })
+    return jsonify({"id": doc_ref.id, "message": "Recipient added"}), 201
 
 
-@app.route("/api/recipients/<int:recipient_id>", methods=["PUT"])
+@app.route("/api/recipients/<recipient_id>", methods=["PUT"])
 def update_recipient(recipient_id):
     data = request.get_json()
-    conn = get_connection()
-    cursor = conn.cursor()
-    try:
-        cursor.execute("""
-            UPDATE recepient SET name=%s, blood_type=%s, phone_no=%s, address=%s
-            WHERE recepient_id=%s
-        """, (data.get("name"), data.get("blood_type"), data.get("contact_no"), data.get("address"), recipient_id))
-        conn.commit()
-        if cursor.rowcount == 0:
-            return jsonify({"error": "Not found"}), 404
-        return jsonify({"message": "Recipient updated"})
-    finally:
-        cursor.close()
-        conn.close()
+    db = get_db()
+    doc_ref = db.collection("recipients").document(recipient_id)
+    if not doc_ref.get().exists:
+        return jsonify({"error": "Not found"}), 404
+    doc_ref.update({
+        "name": data.get("name"),
+        "blood_type": data.get("blood_type"),
+        "contact_no": data.get("contact_no", ""),
+        "address": data.get("address", "")
+    })
+    return jsonify({"message": "Recipient updated"})
 
 
-@app.route("/api/recipients/<int:recipient_id>", methods=["DELETE"])
+@app.route("/api/recipients/<recipient_id>", methods=["DELETE"])
 def delete_recipient(recipient_id):
-    conn = get_connection()
-    cursor = conn.cursor()
-    try:
-        cursor.execute("DELETE FROM recepient WHERE recepient_id = %s", (recipient_id,))
-        conn.commit()
-        if cursor.rowcount == 0:
-            return jsonify({"error": "Not found"}), 404
-        return jsonify({"message": "Recipient deleted"})
-    finally:
-        cursor.close()
-        conn.close()
+    db = get_db()
+    doc_ref = db.collection("recipients").document(recipient_id)
+    if not doc_ref.get().exists:
+        return jsonify({"error": "Not found"}), 404
+    doc_ref.delete()
+    return jsonify({"message": "Recipient deleted"})
 
 
 # ══════════════════════════════════════════════════════════════════════════════
-# REQUESTS — uses recepient_id FK, status default is 'PENDING' (uppercase)
+# REQUESTS — status stored uppercase internally, returned title-cased
 # ══════════════════════════════════════════════════════════════════════════════
+
 @app.route("/api/requests", methods=["GET"])
 def get_requests():
-    conn = get_connection()
-    cursor = conn.cursor(dictionary=True)
-    try:
-        cursor.execute("""
-            SELECT r.request_id, r.recepient_id, r.blood_type, r.request_date,
-                   r.status, r.contact_no,
-                   rec.name AS recipient_name, rec.phone_no AS recipient_contact
-            FROM request r
-            JOIN recepient rec ON r.recepient_id = rec.recepient_id
-            ORDER BY r.request_id DESC
-        """)
-        rows = cursor.fetchall()
-        for r in rows:
-            if isinstance(r.get("request_date"), date):
-                r["request_date"] = r["request_date"].isoformat()
-            # normalize status to title case for frontend badges
-            if r.get("status"):
-                r["status"] = r["status"].capitalize()
-                if r["status"] == "Pending": r["status"] = "Pending"
-        return jsonify(rows)
-    finally:
-        cursor.close()
-        conn.close()
+    db = get_db()
+    rows = []
+    for doc in db.collection("requests").stream():
+        r = {"request_id": doc.id, **doc.to_dict()}
+        # Normalize status capitalisation for frontend badges
+        status_map = {"PENDING": "Pending", "APPROVED": "Approved", "FULFILLED": "Fulfilled"}
+        r["status"] = status_map.get(r.get("status", "").upper(), r.get("status", ""))
+        rows.append(r)
+    rows = sorted(rows, key=lambda x: x.get("request_id", ""), reverse=True)
+    return jsonify(rows)
 
 
 @app.route("/api/requests", methods=["POST"])
@@ -526,57 +521,57 @@ def add_request():
     data = request.get_json()
     if not data.get("recipient_id") or not data.get("blood_type") or not data.get("request_date"):
         return jsonify({"error": "recipient_id, blood_type and request_date are required"}), 400
-    conn = get_connection()
-    cursor = conn.cursor()
-    try:
-        cursor.execute("""
-            INSERT INTO request (recepient_id, blood_type, request_date, contact_no, status)
-            VALUES (%s, %s, %s, %s, 'PENDING')
-        """, (data["recipient_id"], data["blood_type"], data["request_date"], data.get("contact_no")))
-        conn.commit()
-        return jsonify({"id": cursor.lastrowid, "message": "Request created"}), 201
-    finally:
-        cursor.close()
-        conn.close()
+
+    db = get_db()
+    recipient_id = data["recipient_id"]
+
+    # Denormalize recipient name for query-free list views
+    recipient_name = ""
+    rec_doc = db.collection("recipients").document(recipient_id).get()
+    if rec_doc.exists:
+        recipient_name = rec_doc.to_dict().get("name", "")
+
+    _, doc_ref = db.collection("requests").add({
+        "recipient_id": recipient_id,
+        "recipient_name": recipient_name,
+        "blood_type": data["blood_type"],
+        "request_date": data["request_date"],
+        "contact_no": data.get("contact_no", ""),
+        "status": "PENDING",
+        "created_at": datetime.utcnow().isoformat()
+    })
+    return jsonify({"id": doc_ref.id, "message": "Request created"}), 201
 
 
-@app.route("/api/requests/<int:request_id>/status", methods=["PUT"])
+@app.route("/api/requests/<request_id>/status", methods=["PUT"])
 def update_request_status(request_id):
     data = request.get_json()
     status = data.get("status", "").upper()
     if status not in ("PENDING", "APPROVED", "FULFILLED"):
         return jsonify({"error": "Invalid status"}), 400
-    conn = get_connection()
-    cursor = conn.cursor()
-    try:
-        cursor.execute("UPDATE request SET status=%s WHERE request_id=%s", (status, request_id))
-        conn.commit()
-        if cursor.rowcount == 0:
-            return jsonify({"error": "Not found"}), 404
-        return jsonify({"message": f"Status updated to {status}"})
-    finally:
-        cursor.close()
-        conn.close()
+
+    db = get_db()
+    doc_ref = db.collection("requests").document(request_id)
+    if not doc_ref.get().exists:
+        return jsonify({"error": "Not found"}), 404
+    doc_ref.update({"status": status})
+    return jsonify({"message": f"Status updated to {status}"})
 
 
-@app.route("/api/requests/<int:request_id>", methods=["DELETE"])
+@app.route("/api/requests/<request_id>", methods=["DELETE"])
 def delete_request(request_id):
-    conn = get_connection()
-    cursor = conn.cursor()
-    try:
-        cursor.execute("DELETE FROM request WHERE request_id = %s", (request_id,))
-        conn.commit()
-        if cursor.rowcount == 0:
-            return jsonify({"error": "Not found"}), 404
-        return jsonify({"message": "Request deleted"})
-    finally:
-        cursor.close()
-        conn.close()
+    db = get_db()
+    doc_ref = db.collection("requests").document(request_id)
+    if not doc_ref.get().exists:
+        return jsonify({"error": "Not found"}), 404
+    doc_ref.delete()
+    return jsonify({"message": "Request deleted"})
 
 
 # ══════════════════════════════════════════════════════════════════════════════
-# SERVE REACT — must be LAST
+# SERVE FRONTEND — must be LAST
 # ══════════════════════════════════════════════════════════════════════════════
+
 @app.route("/", defaults={"path": ""})
 @app.route("/<path:path>")
 def serve(path):
@@ -587,4 +582,3 @@ def serve(path):
 
 if __name__ == "__main__":
     app.run(debug=True, port=5000)
->>>>>>> e7ebdeb (All changes implemented)
